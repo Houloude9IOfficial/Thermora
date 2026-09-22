@@ -91,10 +91,13 @@ Available readings depend entirely on the operating system, the hardware, the fi
 the drivers and the permissions of the account running Thermora. Thermora does not claim
 that a specific machine will report any particular sensor.
 
-- **macOS.** Apple Silicon Macs usually expose no CPU or GPU temperature to user space;
-  `sysctl`/SMC based readings typically require elevated privileges, and `osascript` is
-  used for power actions. Intel Macs report more through the SMC, sometimes only with
-  elevated privileges.
+- **macOS.** On Apple Silicon there is currently **no** first-party way to read a CPU or
+  GPU temperature from user space: macOS exposes none to user space, and while
+  `/usr/bin/powermetrics` requires root for every sampler, the `smc` sampler that used to
+  print die temperatures has been removed in current macOS versions. Elevating privileges
+  does not change this, so Thermora reports `n/a` on such machines rather than inventing a
+  value. Intel Macs read temperatures through the SMC, sometimes only with elevated
+  privileges. Power actions always use `osascript` and System Events.
 - **Windows.** CPU packages often need a monitoring driver (for example OpenHardwareMonitor)
   or firmware support before WMI exposes a temperature. GPU temperatures depend on the
   vendor driver; NVIDIA readings typically come from `nvidia-smi`.

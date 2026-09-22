@@ -21,6 +21,13 @@ export async function readTemperatures(): Promise<TemperatureReading> {
   });
 }
 
+function platformSensorHint(): string {
+  if (process.arch === "arm64") {
+    return "Apple Silicon exposes no CPU or GPU temperature to user space, and current macOS has removed the powermetrics SMC sampler, so no first-party tool can read one on this machine";
+  }
+  return "Intel Macs read these through the SMC, which may require elevated privileges";
+}
+
 export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
   const reading = await readTemperatures();
   const checks: DiagnosticCheck[] = [];
@@ -30,8 +37,7 @@ export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
     checks.push({
       name: "CPU temperature",
       status: "warn",
-      detail:
-        "no CPU temperature sensor was reported. Apple Silicon Macs frequently expose none to user space, and Intel Macs may need elevated privileges for the SMC sensors",
+      detail: `no CPU temperature sensor was reported. ${platformSensorHint()}`,
     });
   } else {
     checks.push({
@@ -45,8 +51,7 @@ export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
     checks.push({
       name: "GPU temperature",
       status: "warn",
-      detail:
-        "no GPU temperature sensor was reported. Integrated Apple GPUs and many discrete drivers do not expose one to user space",
+      detail: `no GPU temperature sensor was reported. ${platformSensorHint()}`,
     });
   } else {
     checks.push({

@@ -300,7 +300,8 @@ export async function buildDoctorReport(options: {
         : {
             name: "Usable thermal sensors",
             status: "fail",
-            detail: "no usable temperature sensor is readable, so Thermora cannot protect this machine",
+            detail:
+              "no usable temperature sensor is readable, so Thermora cannot protect this machine. Thermora reports n/a instead of inventing a reading",
           },
     );
   } catch (error) {
