@@ -96,12 +96,13 @@ that a specific machine will report any particular sensor.
   `/usr/bin/powermetrics` requires root for every sampler, the `smc` sampler that used to
   print die temperatures has been removed in current macOS versions. Elevating privileges
   does not change this, so Thermora reports `n/a` on such machines rather than inventing a
-  value — unless you opt in to an external sensor provider. Intel Macs read temperatures
-  through the SMC, sometimes only with elevated privileges. Power actions always use
-  `osascript` and System Events.
+  value — unless you opt in to an external provider such as `macmon`, which reads the same
+  data without root. Intel Macs read temperatures through the SMC, sometimes only with
+  elevated privileges. Power actions always use `osascript` and System Events.
 - **Windows.** CPU packages often need a monitoring driver (for example OpenHardwareMonitor)
-  or firmware support before WMI exposes a temperature. GPU temperatures depend on the
-  vendor driver; NVIDIA readings typically come from `nvidia-smi`.
+  or firmware support before WMI exposes a temperature; Thermora also tries ACPI thermal
+  zones through PowerShell, which typically requires an elevated account. GPU temperatures
+  depend on the vendor driver; NVIDIA readings typically come from `nvidia-smi`.
 - **Linux.** Kernel modules such as `coretemp`, `k10temp` or `zenpower` are frequently
   required before `/sys/class/thermal` or hwmon expose anything. Container guests and
   virtual machines often expose nothing at all.
@@ -193,8 +194,12 @@ cp .env.example .env
 | `THERMORA_API_PORT` | `8787` | API bind port (integer, 1-65535) |
 | `THERMORA_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `THERMORA_STATE_FILE` | system temporary directory | Where the daemon writes its status snapshot |
-| `THERMORA_MACOS_SENSOR_COMMAND` | empty (disabled) | macOS only: external CLI used to supply temperatures when macOS exposes none |
-| `THERMORA_MACOS_SENSOR_ARGS` | empty | macOS only: whitespace separated arguments for that command |
+| `THERMORA_MACOS_SENSOR_COMMAND` | empty (disabled) | macOS: external CLI used to supply temperatures when macOS exposes none |
+| `THERMORA_MACOS_SENSOR_ARGS` | empty | macOS: whitespace separated arguments for that command |
+| `THERMORA_WINDOWS_SENSOR_COMMAND` | empty (disabled) | Windows: external CLI used to supply temperatures |
+| `THERMORA_WINDOWS_SENSOR_ARGS` | empty | Windows: whitespace separated arguments for that command |
+| `THERMORA_LINUX_SENSOR_COMMAND` | empty (disabled) | Linux: external CLI used to supply temperatures |
+| `THERMORA_LINUX_SENSOR_ARGS` | empty | Linux: whitespace separated arguments for that command |
 
 Every value is validated. Invalid values produce a readable startup error listing each
 problem, for example:
@@ -227,48 +232,74 @@ CPU, GPU and global counters are tracked independently. Once an action has been 
 Thermora enters the `action-in-progress` state, no other threshold can start a second
 action, and no further evaluation happens until the daemon stops.
 
-## External sensor provider (macOS, opt in)
+## External sensor providers (opt in)
 
-Because macOS exposes no first-party user-space CPU or GPU temperature on Apple Silicon,
-Thermora can be pointed at an external CLI that reads one for you. The provider is
-**disabled by default** and is never required on Linux or Windows.
+Some machines expose no temperature to user space at all: Apple Silicon Macs have no
+first-party user-space sensor, and many locked-down Windows laptops hide ACPI thermal
+zones unless something publishes them. Thermora can be pointed at an external CLI for
+these machines. Every provider is **disabled by default** and none is ever required.
+
+| Platform | Variables |
+| --- | --- |
+| macOS | `THERMORA_MACOS_SENSOR_COMMAND`, `THERMORA_MACOS_SENSOR_ARGS` |
+| Windows | `THERMORA_WINDOWS_SENSOR_COMMAND`, `THERMORA_WINDOWS_SENSOR_ARGS` |
+| Linux | `THERMORA_LINUX_SENSOR_COMMAND`, `THERMORA_LINUX_SENSOR_ARGS` |
 
 ```bash
-# smctemp
-THERMORA_MACOS_SENSOR_COMMAND=/usr/local/bin/smctemp \
-THERMORA_MACOS_SENSOR_ARGS="-c" \
-node dist/index.js sensors
+# Apple Silicon Mac: macmon runs without sudo and reports CPU and GPU temperatures
+brew install macmon
+THERMORA_MACOS_SENSOR_COMMAND=macmon THERMORA_MACOS_SENSOR_ARGS="pipe -s 1" \
+  node dist/index.js doctor
 
-# istats
-THERMORA_MACOS_SENSOR_COMMAND=istats THERMORA_MACOS_SENSOR_ARGS="scan" node dist/index.js doctor
-
-# osx-cpu-temp
-THERMORA_MACOS_SENSOR_COMMAND=/opt/homebrew/bin/osx-cpu-temp node dist/index.js start
+# NVIDIA temperature on Windows
+THERMORA_WINDOWS_SENSOR_COMMAND=nvidia-smi.exe \
+THERMORA_WINDOWS_SENSOR_ARGS="--query-gpu=temperature.gpu --format=csv,noheader" \
+  node dist/index.js doctor
 ```
 
 How it behaves:
 
 - The adapter runs the configured command directly with `execFile` and no shell. Arguments
   are whitespace separated, so put any quoting inside the command you configure.
-- **First-party readings always win.** The provider only fills categories that
-  `systeminformation` could not read: if the SMC already reports CPU temperatures, that
-  GPU reading is ignored; if the CPU is unknown, the provider supplies it.
-- Output is parsed tolerantly. Labels containing `cpu`, `core`, `die`, `package`, `soc`,
-  `cluster`, `efficiency` or `performance` count as CPU readings, labels containing `gpu`,
-  `graphics`, `radeon`, `nvidia`, `geforce`, `metal` or `video` count as GPU devices, and a
-  bare value such as `72.3°C` counts as the CPU temperature. Values must carry a `C`, `°C`
-  or `celsius` unit, or be the only number on their own line.
-- Anything outside `0 < t <= 150 C` is discarded, and a provider that fails is retried at
-  most once every five minutes so a broken helper cannot flood the machine with processes.
+- **First-party readings always win.** A provider only fills categories the operating
+  system could not report: if the SMC or ACPI already reports CPU temperatures, the
+  provider cannot override them.
+- Output is parsed tolerantly, in either text or JSON form:
+  - JSON objects (including one object per line, as streamers emit) are searched for
+    numeric keys containing `temp`, `thermal` or `die`, classified by key names such as
+    `cpu_temp_avg` and `gpu_temp_avg`, and by a `name`/`label`/`sensor` field for sensor
+    arrays.
+  - Text labels containing `cpu`, `core`, `die`, `package`, `soc`, `cluster`,
+    `efficiency` or `performance` count as CPU readings; `gpu`, `graphics`, `radeon`,
+    `nvidia`, `geforce`, `metal` or `video` count as GPU devices. A bare value such as
+    `72.3°C` counts as the CPU temperature. Values must carry a `C`, `°C` or `celsius`
+    unit, or be the only number on their own line.
+- Anything outside `0 < t <= 150 C` is discarded, and a failing provider is retried at
+  most once every five minutes, so a broken helper cannot flood the machine with
+  processes.
+- Choose a poll interval the helper can keep up with: a command that samples for a second
+  is fine at `THERMORA_POLL_INTERVAL_MS=5000` but wasteful at `1000`.
 - `thermora doctor` reports the provider explicitly: `not configured`, the readings it
   supplied, or the exact failure such as `was not found` or
-  `produced no recognizable temperature (first line: ...)`.
-- Thermora never elevates privileges for the provider, and the command is only ever the
-  one you configured. Run the helper as the same user that runs Thermora; if it needs root,
-  install it as a privileged helper of your choosing.
+  `produced no recognizable temperature (first line: ...)`. `thermora start` prints the
+  same explanation once at startup whenever no usable sensor was found.
+- Thermora never elevates privileges for a provider, and only ever runs the command you
+  configured. Run the helper as the same user that runs Thermora.
 
-The provider is macOS-only and lives entirely inside `src/platforms/macos/`, so the
-Thermora core and the other platform adapters are unaffected by it.
+Providers live in `src/platforms/externalProvider.ts` and are wired in by each platform
+adapter, so the Thermora core and its evaluation logic are unaffected by them.
+
+### Native fallbacks per platform
+
+Providers are the last resort; Thermora always tries the operating system first:
+
+- **Windows** queries ACPI thermal zones through PowerShell
+  (`root\wmi` / `MSAcpi_ThermalZoneTemperature`, converted from tenths of Kelvin) when
+  `systeminformation` reports nothing. This usually needs an elevated account, and it backs
+  off for five minutes when it is refused.
+- **Linux** reads CPU thermal zones from `/sys/class/thermal` in addition to
+  `systeminformation`.
+- **macOS** has no remaining native fallback, which is exactly why the provider exists.
 
 ## Dry run
 

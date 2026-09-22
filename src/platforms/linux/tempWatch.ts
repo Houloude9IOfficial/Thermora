@@ -4,6 +4,12 @@ import si from "systeminformation";
 import type { DiagnosticCheck, TemperatureReading } from "../../types.js";
 import { formatTemperature } from "../../utils/format.js";
 import { buildTemperatureReading, maxTemperature, normalizeTemperature, safeSensor } from "../../utils/sensors.js";
+import {
+  LINUX_PROVIDER,
+  mergeSensorSources,
+  readExternalTemperatures,
+  sensorProviderDiagnostics,
+} from "../externalProvider.js";
 
 const THERMAL_ZONE_DIRECTORY = "/sys/class/thermal";
 const CPU_ZONE_PATTERN = /x86_pkg_temp|acpitz|cpu|coretemp|k10temp|zenpower|soc_thermal/i;
@@ -49,7 +55,7 @@ export async function readTemperatures(): Promise<TemperatureReading> {
   const systemInformationMax = maxTemperature([cpuTemperature?.main, cpuTemperature?.max]);
   const fallback = systemInformationMax === null ? zoneMax : null;
 
-  return buildTemperatureReading({
+  const internal = {
     cpu: {
       main: systemInformationMain ?? fallback,
       max: systemInformationMax ?? fallback,
@@ -57,10 +63,15 @@ export async function readTemperatures(): Promise<TemperatureReading> {
     },
     gpuDevices: (graphics?.controllers ?? []).map((controller) => ({
       name: controller.model,
-      vendor: controller.vendor,
-      temperature: controller.temperatureGpu,
+      vendor: controller.vendor ?? null,
+      temperature: controller.temperatureGpu ?? null,
     })),
-  });
+  };
+
+  const external = await readExternalTemperatures(LINUX_PROVIDER);
+  const merged = mergeSensorSources(internal, external.ok ? { cpu: external.cpu, gpu: external.gpu } : { cpu: [], gpu: [] });
+
+  return buildTemperatureReading({ cpu: merged.cpu, gpuDevices: merged.gpuDevices });
 }
 
 export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
@@ -74,7 +85,7 @@ export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
       name: "CPU temperature",
       status: "warn",
       detail:
-        "no CPU temperature was readable. Kernel modules such as coretemp, k10temp or zenpower are often required before sensors are exposed",
+        "no CPU temperature was readable. Kernel modules such as coretemp, k10temp or zenpower are often required before sensors are exposed. An external provider can supply readings",
     });
   } else {
     checks.push({
@@ -102,7 +113,8 @@ export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
     checks.push({
       name: "GPU temperature",
       status: "warn",
-      detail: "no GPU temperature sensor was reported. Vendor drivers must expose one to user space",
+      detail:
+        "no GPU temperature was reported. Vendor drivers must expose one to user space. An external provider can supply readings",
     });
   } else {
     checks.push({
@@ -112,5 +124,6 @@ export async function temperatureDiagnostics(): Promise<DiagnosticCheck[]> {
     });
   }
 
+  checks.push(...(await sensorProviderDiagnostics(LINUX_PROVIDER)));
   return checks;
 }

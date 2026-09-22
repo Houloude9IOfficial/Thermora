@@ -164,11 +164,25 @@ export class Daemon {
         this.logger.error(
           "No usable temperature sensor was detected. Thermora cannot protect this machine until a sensor becomes readable.",
         );
+        await this.reportSensorDiagnostics();
         return;
       }
       this.logger.info(`Sensors ready: ${describeReading(reading)}`);
     } catch (error) {
       this.logger.error(`Initial sensor probe failed: ${describeError(error)}`);
+    }
+  }
+
+  private async reportSensorDiagnostics(): Promise<void> {
+    try {
+      const checks = await this.adapter.runDiagnostics();
+      for (const check of checks) {
+        if (check.status === "ok") continue;
+        this.logger.warn(`Sensor diagnostics (${check.status}) ${check.name}: ${check.detail}`);
+      }
+      this.logger.warn('Run "thermora doctor" for the full platform report.');
+    } catch (error) {
+      this.logger.warn(`Platform diagnostics failed: ${describeError(error)}`);
     }
   }
 
