@@ -1,0 +1,47 @@
+{
+  "name": "thermora",
+  "version": "0.1.0",
+  "description": "Cross-platform thermal protection daemon for Windows, Linux and macOS",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "main": "./dist/index.js",
+  "bin": {
+    "thermora": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "keywords": [
+    "thermal",
+    "temperature",
+    "daemon",
+    "monitoring",
+    "shutdown",
+    "restart"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/index.ts start --dry-run",
+    "dev:once": "tsx src/index.ts start --dry-run",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "start": "node dist/index.js start",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "test:watch": "tsx --test --watch \"tests/**/*.test.ts\"",
+    "simulate": "tsx src/index.ts simulate",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\""
+  },
+  "dependencies": {
+    "systeminformation": "^5.33.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
